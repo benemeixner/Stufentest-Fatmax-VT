@@ -3,7 +3,6 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-from streamlit_plotly_events import plotly_events
 
 from cpet_xml_reader import read_metasoftstudio_xml
 from cpet_analysis import assign_stages, stage_lastwindow_means, add_fatox_table
@@ -50,7 +49,6 @@ df["t_rel_s"] = df["t_s"] - float(offset_s)
 df_1hz = df.copy()
 df_1hz["sec"] = np.floor(df_1hz["t_rel_s"]).astype(int)
 
-# IMPORTANT: exclude t_rel_s from aggregation to avoid duplicate column name later
 exclude_cols = {"t", "Phase", "Marker", "t_rel_s"}
 num_cols = [c for c in df_1hz.columns if c not in exclude_cols]
 
@@ -73,65 +71,81 @@ show_cols = [c for c in ["stage_idx","stage_power_w","n_samples","V'O2","V'CO2",
                          "PETO2","PETCO2","HF","FatOx_g_min","CHOox_g_min"] if c in stage_tbl.columns]
 st.dataframe(stage_tbl[show_cols], use_container_width=True)
 
-# ---------- FatMax: clickable Plotly scatter ----------
+# ---------- FatMax: Plotly scatter + Streamlit native selection ----------
 st.subheader("FatMax: Scatter (FatOx vs Leistung) – Punkt anklicken zum Auswählen")
 
 if "FatOx_g_min" in stage_tbl.columns and "stage_power_w" in stage_tbl.columns and stage_tbl["FatOx_g_min"].notna().any():
-    plot_df = stage_tbl[["stage_power_w", "FatOx_g_min"]].dropna().sort_values("stage_power_w").reset_index(drop=True)
+    plot_df = stage_tbl[["stage_power_w", "FatOx_g_min"]].copy()
 
-    # selection by point index (stable)
-    if "fatmax_point" not in st.session_state:
-        st.session_state.fatmax_point = int(plot_df["FatOx_g_min"].idxmax())
+    # robust numeric conversion (just in case locale commas sneak in)
+    plot_df["stage_power_w"] = pd.to_numeric(plot_df["stage_power_w"].astype(str).str.replace(",", ".", regex=False), errors="coerce")
+    plot_df["FatOx_g_min"] = pd.to_numeric(plot_df["FatOx_g_min"].astype(str).str.replace(",", ".", regex=False), errors="coerce")
+    plot_df = plot_df.dropna().sort_values("stage_power_w").reset_index(drop=True)
 
-    # realistic y-axis scaling
-    fat_max = float(plot_df["FatOx_g_min"].max())
-    fat_min = float(plot_df["FatOx_g_min"].min())
-    if fat_max > 0:
-        y_low = 0.0
-        y_high = max(0.2, fat_max * 1.2)
+    if plot_df.empty:
+        st.info("Keine gültigen FatOx/Leistung-Werte zum Plotten gefunden.")
     else:
-        y_low = fat_min * 1.2
-        y_high = 0.5
+        if "fatmax_point" not in st.session_state:
+            st.session_state.fatmax_point = int(plot_df["FatOx_g_min"].idxmax())
 
-    sizes = [18 if i == int(st.session_state.fatmax_point) else 10 for i in range(len(plot_df))]
+        fat_max = float(plot_df["FatOx_g_min"].max())
+        fat_min = float(plot_df["FatOx_g_min"].min())
+        if fat_max > 0:
+            y_low = 0.0
+            y_high = max(0.2, fat_max * 1.2)
+        else:
+            y_low = fat_min * 1.2
+            y_high = 0.5
 
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=plot_df["stage_power_w"],
-        y=plot_df["FatOx_g_min"],
-        mode="markers+lines",
-        marker=dict(size=sizes),
-        hovertemplate="Leistung: %{x:.0f} W<br>FatOx: %{y:.3f} g/min<extra></extra>",
-        name="FatOx"
-    ))
-    fig.update_layout(
-        xaxis_title="Leistung (W)",
-        yaxis_title="FatOx (g/min)",
-        yaxis=dict(range=[y_low, y_high]),
-        height=420,
-        margin=dict(l=40, r=20, t=10, b=40),
-    )
+        sizes = [18 if i == int(st.session_state.fatmax_point) else 10 for i in range(len(plot_df))]
 
-    # IMPORTANT: do not pass override_width='100%' (Streamlit Cloud); it must be int or omitted.
-    clicked = plotly_events(
-        fig,
-        click_event=True,
-        hover_event=False,
-        select_event=False,
-        override_height=420,
-    )
-    if clicked:
-        point_idx = clicked[0].get("pointIndex", None)
-        if point_idx is not None and 0 <= point_idx < len(plot_df):
-            st.session_state.fatmax_point = int(point_idx)
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=plot_df["stage_power_w"],
+            y=plot_df["FatOx_g_min"],
+            mode="markers+lines",
+            marker=dict(size=sizes),
+            hovertemplate="Leistung: %{x:.0f} W<br>FatOx: %{y:.3f} g/min<extra></extra>",
+            name="FatOx"
+        ))
+        fig.update_layout(
+            xaxis_title="Leistung (W)",
+            yaxis_title="FatOx (g/min)",
+            xaxis=dict(type="linear"),
+            # lock y-scale so zooming/panning on x doesn't blow up y-range
+            yaxis=dict(range=[y_low, y_high], fixedrange=True),
+            height=420,
+            margin=dict(l=40, r=20, t=10, b=40),
+            uirevision="fatmax"  # keep axis state stable between reruns
+        )
 
-    sel = plot_df.iloc[int(st.session_state.fatmax_point)]
-    st.write(f"**Ausgewählt:** {sel['stage_power_w']:.0f} W  |  **FatOx:** {sel['FatOx_g_min']:.3f} g/min")
+        # Streamlit-native selection events (no extra package)
+        selection = st.plotly_chart(
+            fig,
+            use_container_width=True,
+            on_select="rerun",
+            selection_mode=("points",),
+            key="fatmax_plot",
+        )
+
+        # Parse selection dict safely
+        points = []
+        if isinstance(selection, dict):
+            points = selection.get("selection", {}).get("points", []) or []
+        if points:
+            # Streamlit/Plotly usually provides pointIndex
+            pi = points[0].get("pointIndex", None)
+            if pi is None:
+                pi = points[0].get("point_index", None)
+            if pi is not None and 0 <= int(pi) < len(plot_df):
+                st.session_state.fatmax_point = int(pi)
+
+        sel = plot_df.iloc[int(st.session_state.fatmax_point)]
+        st.write(f"**Ausgewählt:** {sel['stage_power_w']:.0f} W  |  **FatOx:** {sel['FatOx_g_min']:.3f} g/min")
 else:
     st.info("FatOx oder Stage Power fehlt / ist komplett NaN. (Für FatOx müssen VO2 und VCO2 vorhanden sein.)")
 
 # ---------- Wasserman 9-panel (smoothed) ----------
-
 st.subheader("Wasserman 9-Felder (30s rolling mean) – VT1/VT2 setzen")
 
 vt1_s = st.slider("VT1 Zeitpunkt (s, relativ zum Beginn der 1. Stufe)", min_value=0.0, max_value=max_t, value=min(300.0, max_t), step=1.0)
@@ -153,7 +167,8 @@ def timeseries_fig(y_cols, title, yaxis_title=None):
         margin=dict(l=40, r=20, t=35, b=35),
         xaxis_title="Zeit (s)",
         yaxis_title=yaxis_title or "",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        uirevision="wasserman"
     )
     return add_vlines(fig)
 
@@ -171,7 +186,8 @@ def vslope_fig():
         margin=dict(l=40, r=20, t=35, b=35),
         xaxis_title="VO2 (L/min)",
         yaxis_title="VCO2 (L/min)",
-        showlegend=False
+        showlegend=False,
+        uirevision="wasserman"
     )
     return fig
 

@@ -1,12 +1,12 @@
-# Stufentest-App v5
+# Stufentest-App v7
 
-Fix für Streamlit Cloud Fehler:
-- Verhindert doppelte Spaltennamen (`t_rel_s`) nach 1-Hz Aggregation.
+Fixes:
+- FatMax Scatter wird jetzt mit `st.plotly_chart(..., on_select="rerun", selection_mode=("points",))` gerendert (kein streamlit-plotly-events).
+  → Dadurch verschwindet der Plot nicht mehr auf Streamlit Cloud.
+- x-Achse wird explizit numerisch erzwungen (falls irgendwo Komma-Dezimalwerte auftauchen).
+- y-Achse für FatOx ist fixiert (`fixedrange=True`), damit Zoom/Pan auf x die y-Skala nicht „sprengt“.
 
-Zusätzlich:
-- 30s rolling mean (centered) für Wasserman-Zeitreihen
-- FatMax Plotly mit Klick-Auswahl + Auto-y-Skalierung
+Wasserman:
+- 1 Hz Aggregation + 30 s rolling mean (centered) für Zeitreihen-Panels.
 
-
-Update v6:
-- FatMax plot uses ONLY stage_power_w + FatOx_g_min and fixes Streamlit Cloud rendering by removing override_width.
+Deploy main file: `app_cpet_step.py`
