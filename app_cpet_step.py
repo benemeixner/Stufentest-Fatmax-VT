@@ -49,9 +49,14 @@ df["t_rel_s"] = df["t_s"] - float(offset_s)
 # --- 1 Hz aggregation + 30 s rolling smoothing for Wasserman time series ---
 df_1hz = df.copy()
 df_1hz["sec"] = np.floor(df_1hz["t_rel_s"]).astype(int)
-num_cols = [c for c in df_1hz.columns if c not in ["t", "Phase", "Marker"]]
+
+# IMPORTANT: exclude t_rel_s from aggregation to avoid duplicate column name later
+exclude_cols = {"t", "Phase", "Marker", "t_rel_s"}
+num_cols = [c for c in df_1hz.columns if c not in exclude_cols]
+
 df_1hz = df_1hz.groupby("sec", as_index=False)[num_cols].mean(numeric_only=True)
-df_1hz = df_1hz.rename(columns={"sec": "t_rel_s"})
+df_1hz["t_rel_s"] = df_1hz["sec"].astype(float)
+df_1hz = df_1hz.drop(columns=["sec"])
 
 roll_cols = [c for c in df_1hz.columns if c != "t_rel_s"]
 df_smooth = df_1hz.sort_values("t_rel_s").copy()
@@ -78,14 +83,12 @@ if "FatOx_g_min" in stage_tbl.columns and stage_tbl["FatOx_g_min"].notna().any()
     plot_df = stage_tbl.dropna(subset=["stage_power_w", "FatOx_g_min"]).copy()
     plot_df["selected"] = plot_df["stage_idx"].astype(int) == int(st.session_state.fatmax_stage)
 
-    # Realistic y-axis scaling:
     fat_max = float(np.nanmax(plot_df["FatOx_g_min"])) if len(plot_df) else 0.0
     fat_min = float(np.nanmin(plot_df["FatOx_g_min"])) if len(plot_df) else 0.0
     if fat_max > 0:
         y_low = 0.0
         y_high = max(0.2, fat_max * 1.2)
     else:
-        # if all values <=0, show them (rare; usually indicates measurement noise or very low intensities)
         y_low = fat_min * 1.2
         y_high = 0.5
 
@@ -95,7 +98,6 @@ if "FatOx_g_min" in stage_tbl.columns and stage_tbl["FatOx_g_min"].notna().any()
         y=plot_df["FatOx_g_min"],
         mode="markers+lines",
         text=[f"Stage {int(s)}" for s in plot_df["stage_idx"]],
-        customdata=plot_df["stage_idx"],
         marker=dict(size=[18 if sel else 10 for sel in plot_df["selected"]]),
         hovertemplate="Leistung: %{x:.0f} W<br>FatOx: %{y:.3f} g/min<br>%{text}<extra></extra>",
         name="FatOx"
@@ -179,7 +181,6 @@ panel_figs = [
     timeseries_fig(["V'O2/kg", "V'O2/HF"], "Relative VO2 & O2-pulse", ""),
 ]
 
-# Render 3x3
 for i in range(0, 9, 3):
     c1, c2, c3 = st.columns(3)
     c1.plotly_chart(panel_figs[i], use_container_width=True)
@@ -209,6 +210,5 @@ m2.metric("VT2", f"{p_vt2:.1f} W  (Zeit {vt2_s:.0f} s, in Stufe {st_vt2})")
 
 st.caption("Interpolation: innerhalb der aktuellen 3-min Stufe wird zwischen **vorheriger** und **aktueller** Stufe linear interpoliert (Lag-Konvention).")
 
-# Export stage table
 csv_bytes = stage_tbl.to_csv(index=False).encode("utf-8")
 st.download_button("Stufentabelle (letzte Sekunden) als CSV herunterladen", data=csv_bytes, file_name="stufen_last_window.csv", mime="text/csv")

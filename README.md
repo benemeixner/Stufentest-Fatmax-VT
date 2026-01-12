@@ -1,7 +1,8 @@
-# Stufentest-App v4
+# Stufentest-App v5
 
-- FatMax Plotly (Klick auf Punkt) + auto y-axis scaling (realistisch)
-- 9-Felder Wasserman: 1 Hz Aggregation + **30 s rolling mean** (centered) für alle Zeitreihen-Panels
-- V-Slope bleibt als Rohpunkte (VO2 vs VCO2)
+Fix für Streamlit Cloud Fehler:
+- Verhindert doppelte Spaltennamen (`t_rel_s`) nach 1-Hz Aggregation.
 
-Deploy main file: `app_cpet_step.py`
+Zusätzlich:
+- 30s rolling mean (centered) für Wasserman-Zeitreihen
+- FatMax Plotly mit Klick-Auswahl + Auto-y-Skalierung
