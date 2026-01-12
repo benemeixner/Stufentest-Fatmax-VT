@@ -34,7 +34,7 @@ except Exception as e:
 # ---------- Stage alignment ----------
 df = assign_stages(raw, offset_s=offset_s, stage_duration_s=stage_duration_s, start_power_w=start_power_w, step_power_w=step_power_w)
 
-# Numeric coercion for all numeric columns
+# Numeric coercion
 for c in df.columns:
     if c not in ["t", "Phase", "Marker"]:
         df[c] = pd.to_numeric(df[c], errors="coerce")
@@ -45,7 +45,19 @@ if df.empty:
     st.stop()
 
 df["t_rel_s"] = df["t_s"] - float(offset_s)
-max_t = float(df["t_rel_s"].max())
+
+# --- 1 Hz aggregation + 30 s rolling smoothing for Wasserman time series ---
+df_1hz = df.copy()
+df_1hz["sec"] = np.floor(df_1hz["t_rel_s"]).astype(int)
+num_cols = [c for c in df_1hz.columns if c not in ["t", "Phase", "Marker"]]
+df_1hz = df_1hz.groupby("sec", as_index=False)[num_cols].mean(numeric_only=True)
+df_1hz = df_1hz.rename(columns={"sec": "t_rel_s"})
+
+roll_cols = [c for c in df_1hz.columns if c != "t_rel_s"]
+df_smooth = df_1hz.sort_values("t_rel_s").copy()
+df_smooth[roll_cols] = df_smooth[roll_cols].rolling(window=30, min_periods=5, center=True).mean()
+
+max_t = float(df_1hz["t_rel_s"].max())
 
 # ---------- Stage table (last window means) ----------
 stage_tbl = stage_lastwindow_means(df, stage_duration_s=stage_duration_s, last_window_s=last_window_s)
@@ -61,11 +73,21 @@ st.subheader("FatMax: Punkte (FatOx vs Leistung) – Punkt anklicken zum Auswäh
 
 if "FatOx_g_min" in stage_tbl.columns and stage_tbl["FatOx_g_min"].notna().any():
     if "fatmax_stage" not in st.session_state:
-        # default to max fatox
         st.session_state.fatmax_stage = int(stage_tbl.loc[stage_tbl["FatOx_g_min"].idxmax(), "stage_idx"])
 
     plot_df = stage_tbl.dropna(subset=["stage_power_w", "FatOx_g_min"]).copy()
     plot_df["selected"] = plot_df["stage_idx"].astype(int) == int(st.session_state.fatmax_stage)
+
+    # Realistic y-axis scaling:
+    fat_max = float(np.nanmax(plot_df["FatOx_g_min"])) if len(plot_df) else 0.0
+    fat_min = float(np.nanmin(plot_df["FatOx_g_min"])) if len(plot_df) else 0.0
+    if fat_max > 0:
+        y_low = 0.0
+        y_high = max(0.2, fat_max * 1.2)
+    else:
+        # if all values <=0, show them (rare; usually indicates measurement noise or very low intensities)
+        y_low = fat_min * 1.2
+        y_high = 0.5
 
     fig = go.Figure()
     fig.add_trace(go.Scatter(
@@ -81,13 +103,13 @@ if "FatOx_g_min" in stage_tbl.columns and stage_tbl["FatOx_g_min"].notna().any()
     fig.update_layout(
         xaxis_title="Leistung (W)",
         yaxis_title="FatOx (g/min)",
+        yaxis=dict(range=[y_low, y_high]),
         height=420,
         margin=dict(l=40, r=20, t=30, b=40),
     )
 
     clicked = plotly_events(fig, click_event=True, hover_event=False, select_event=False, override_height=420, override_width="100%")
     if clicked:
-        # clicked[0] includes pointIndex; map to stage_idx via plot_df order
         point_idx = clicked[0].get("pointIndex", None)
         if point_idx is not None and 0 <= point_idx < len(plot_df):
             st.session_state.fatmax_stage = int(plot_df.iloc[point_idx]["stage_idx"])
@@ -99,10 +121,10 @@ if "FatOx_g_min" in stage_tbl.columns and stage_tbl["FatOx_g_min"].notna().any()
         f"**FatOx:** {fatmax_row['FatOx_g_min']:.3f} g/min"
     )
 else:
-    st.info("FatOx konnte nicht berechnet werden (VO2/VCO2 fehlen).")
+    st.info("FatOx konnte nicht berechnet werden (VO2/VCO2 fehlen) oder ist komplett NaN.")
 
-# ---------- Wasserman 9-panel (classic-ish) ----------
-st.subheader("Wasserman 9-Felder (klassisch) – VT1/VT2 setzen")
+# ---------- Wasserman 9-panel (smoothed) ----------
+st.subheader("Wasserman 9-Felder (30s rolling mean) – VT1/VT2 setzen")
 
 vt1_s = st.slider("VT1 Zeitpunkt (s, relativ zum Beginn der 1. Stufe)", min_value=0.0, max_value=max_t, value=min(300.0, max_t), step=1.0)
 vt2_s = st.slider("VT2 Zeitpunkt (s, relativ zum Beginn der 1. Stufe)", min_value=0.0, max_value=max_t, value=min(600.0, max_t), step=1.0)
@@ -115,8 +137,8 @@ def add_vlines(fig):
 def timeseries_fig(y_cols, title, yaxis_title=None):
     fig = go.Figure()
     for col in y_cols:
-        if col in df.columns:
-            fig.add_trace(go.Scatter(x=df["t_rel_s"], y=df[col], mode="lines", name=col))
+        if col in df_smooth.columns:
+            fig.add_trace(go.Scatter(x=df_smooth["t_rel_s"], y=df_smooth[col], mode="lines", name=col))
     fig.update_layout(
         title=title,
         height=260,
@@ -145,26 +167,24 @@ def vslope_fig():
     )
     return fig
 
-# Define classic 9 panels (fallbacks if some cols missing)
-panel_specs = [
-    ("V-Slope", vslope_fig, None),
-    ("VO2 & VCO2", lambda: timeseries_fig(["V'O2", "V'CO2"], "VO2 & VCO2", "L/min"), None),
-    ("VE", lambda: timeseries_fig(["V'E"], "Ventilation (VE)", "L/min"), None),
-    ("RER", lambda: timeseries_fig(["RER"], "RER", ""), None),
-    ("VE/VO2 & VE/VCO2", lambda: timeseries_fig(["V'E/V'O2", "V'E/V'CO2"], "Ventilatory equivalents", ""), None),
-    ("PetO2 & PetCO2", lambda: timeseries_fig(["PETO2", "PETCO2"], "End-tidal O2/CO2", "mmHg"), None),
-    ("VT & AF", lambda: timeseries_fig(["VT", "AF"], "Tidal volume & breathing frequency", ""), None),
-    ("HF", lambda: timeseries_fig(["HF"], "Heart rate", "bpm"), None),
-    ("VO2/kg & O2-pulse", lambda: timeseries_fig(["V'O2/kg", "V'O2/HF"], "Relative VO2 & O2-pulse", ""), None),
+panel_figs = [
+    vslope_fig(),
+    timeseries_fig(["V'O2", "V'CO2"], "VO2 & VCO2", "L/min"),
+    timeseries_fig(["V'E"], "Ventilation (VE)", "L/min"),
+    timeseries_fig(["RER"], "RER", ""),
+    timeseries_fig(["V'E/V'O2", "V'E/V'CO2"], "Ventilatory equivalents", ""),
+    timeseries_fig(["PETO2", "PETCO2"], "End-tidal O2/CO2", "mmHg"),
+    timeseries_fig(["VT", "AF"], "Tidal volume & breathing frequency", ""),
+    timeseries_fig(["HF"], "Heart rate", "bpm"),
+    timeseries_fig(["V'O2/kg", "V'O2/HF"], "Relative VO2 & O2-pulse", ""),
 ]
 
-# Render in 3x3 grid
-rows = [panel_specs[i:i+3] for i in range(0, 9, 3)]
-for row in rows:
+# Render 3x3
+for i in range(0, 9, 3):
     c1, c2, c3 = st.columns(3)
-    for col_container, (name, fig_fn, _) in zip([c1, c2, c3], row):
-        fig = fig_fn()
-        col_container.plotly_chart(fig, use_container_width=True)
+    c1.plotly_chart(panel_figs[i], use_container_width=True)
+    c2.plotly_chart(panel_figs[i+1], use_container_width=True)
+    c3.plotly_chart(panel_figs[i+2], use_container_width=True)
 
 # ---------- VT power interpolation ----------
 def vt_power_interpolated(t_rel_s: float) -> float:
