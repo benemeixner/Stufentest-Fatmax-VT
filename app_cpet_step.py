@@ -74,17 +74,18 @@ show_cols = [c for c in ["stage_idx","stage_power_w","n_samples","V'O2","V'CO2",
 st.dataframe(stage_tbl[show_cols], use_container_width=True)
 
 # ---------- FatMax: clickable Plotly scatter ----------
-st.subheader("FatMax: Punkte (FatOx vs Leistung) – Punkt anklicken zum Auswählen")
+st.subheader("FatMax: Scatter (FatOx vs Leistung) – Punkt anklicken zum Auswählen")
 
-if "FatOx_g_min" in stage_tbl.columns and stage_tbl["FatOx_g_min"].notna().any():
-    if "fatmax_stage" not in st.session_state:
-        st.session_state.fatmax_stage = int(stage_tbl.loc[stage_tbl["FatOx_g_min"].idxmax(), "stage_idx"])
+if "FatOx_g_min" in stage_tbl.columns and "stage_power_w" in stage_tbl.columns and stage_tbl["FatOx_g_min"].notna().any():
+    plot_df = stage_tbl[["stage_power_w", "FatOx_g_min"]].dropna().sort_values("stage_power_w").reset_index(drop=True)
 
-    plot_df = stage_tbl.dropna(subset=["stage_power_w", "FatOx_g_min"]).copy()
-    plot_df["selected"] = plot_df["stage_idx"].astype(int) == int(st.session_state.fatmax_stage)
+    # selection by point index (stable)
+    if "fatmax_point" not in st.session_state:
+        st.session_state.fatmax_point = int(plot_df["FatOx_g_min"].idxmax())
 
-    fat_max = float(np.nanmax(plot_df["FatOx_g_min"])) if len(plot_df) else 0.0
-    fat_min = float(np.nanmin(plot_df["FatOx_g_min"])) if len(plot_df) else 0.0
+    # realistic y-axis scaling
+    fat_max = float(plot_df["FatOx_g_min"].max())
+    fat_min = float(plot_df["FatOx_g_min"].min())
     if fat_max > 0:
         y_low = 0.0
         y_high = max(0.2, fat_max * 1.2)
@@ -92,14 +93,15 @@ if "FatOx_g_min" in stage_tbl.columns and stage_tbl["FatOx_g_min"].notna().any()
         y_low = fat_min * 1.2
         y_high = 0.5
 
+    sizes = [18 if i == int(st.session_state.fatmax_point) else 10 for i in range(len(plot_df))]
+
     fig = go.Figure()
     fig.add_trace(go.Scatter(
         x=plot_df["stage_power_w"],
         y=plot_df["FatOx_g_min"],
         mode="markers+lines",
-        text=[f"Stage {int(s)}" for s in plot_df["stage_idx"]],
-        marker=dict(size=[18 if sel else 10 for sel in plot_df["selected"]]),
-        hovertemplate="Leistung: %{x:.0f} W<br>FatOx: %{y:.3f} g/min<br>%{text}<extra></extra>",
+        marker=dict(size=sizes),
+        hovertemplate="Leistung: %{x:.0f} W<br>FatOx: %{y:.3f} g/min<extra></extra>",
         name="FatOx"
     ))
     fig.update_layout(
@@ -107,25 +109,29 @@ if "FatOx_g_min" in stage_tbl.columns and stage_tbl["FatOx_g_min"].notna().any()
         yaxis_title="FatOx (g/min)",
         yaxis=dict(range=[y_low, y_high]),
         height=420,
-        margin=dict(l=40, r=20, t=30, b=40),
+        margin=dict(l=40, r=20, t=10, b=40),
     )
 
-    clicked = plotly_events(fig, click_event=True, hover_event=False, select_event=False, override_height=420, override_width="100%")
+    # IMPORTANT: do not pass override_width='100%' (Streamlit Cloud); it must be int or omitted.
+    clicked = plotly_events(
+        fig,
+        click_event=True,
+        hover_event=False,
+        select_event=False,
+        override_height=420,
+    )
     if clicked:
         point_idx = clicked[0].get("pointIndex", None)
         if point_idx is not None and 0 <= point_idx < len(plot_df):
-            st.session_state.fatmax_stage = int(plot_df.iloc[point_idx]["stage_idx"])
+            st.session_state.fatmax_point = int(point_idx)
 
-    fatmax_row = stage_tbl[stage_tbl["stage_idx"].astype(int) == int(st.session_state.fatmax_stage)].iloc[0]
-    st.write(
-        f"**Ausgewählte FatMax-Stufe:** {int(fatmax_row['stage_idx'])}  | "
-        f"**Leistung:** {fatmax_row['stage_power_w']:.0f} W  | "
-        f"**FatOx:** {fatmax_row['FatOx_g_min']:.3f} g/min"
-    )
+    sel = plot_df.iloc[int(st.session_state.fatmax_point)]
+    st.write(f"**Ausgewählt:** {sel['stage_power_w']:.0f} W  |  **FatOx:** {sel['FatOx_g_min']:.3f} g/min")
 else:
-    st.info("FatOx konnte nicht berechnet werden (VO2/VCO2 fehlen) oder ist komplett NaN.")
+    st.info("FatOx oder Stage Power fehlt / ist komplett NaN. (Für FatOx müssen VO2 und VCO2 vorhanden sein.)")
 
 # ---------- Wasserman 9-panel (smoothed) ----------
+
 st.subheader("Wasserman 9-Felder (30s rolling mean) – VT1/VT2 setzen")
 
 vt1_s = st.slider("VT1 Zeitpunkt (s, relativ zum Beginn der 1. Stufe)", min_value=0.0, max_value=max_t, value=min(300.0, max_t), step=1.0)

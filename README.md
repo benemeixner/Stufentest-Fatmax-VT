@@ -6,3 +6,7 @@ Fix für Streamlit Cloud Fehler:
 Zusätzlich:
 - 30s rolling mean (centered) für Wasserman-Zeitreihen
 - FatMax Plotly mit Klick-Auswahl + Auto-y-Skalierung
+
+
+Update v6:
+- FatMax plot uses ONLY stage_power_w + FatOx_g_min and fixes Streamlit Cloud rendering by removing override_width.
