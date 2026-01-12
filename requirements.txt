@@ -1,4 +1,5 @@
 streamlit>=1.30
 pandas>=2.0
 numpy>=1.24
-altair>=5.0
+plotly>=5.18
+streamlit-plotly-events>=0.0.6

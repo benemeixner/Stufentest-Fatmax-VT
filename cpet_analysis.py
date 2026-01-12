@@ -1,5 +1,5 @@
 # cpet_analysis.py
-"""Stage alignment, last-30s stage means, FatOx calculations."""
+"""Stage alignment, last-window stage means, FatOx calculations."""
 
 from __future__ import annotations
 
@@ -50,7 +50,7 @@ def assign_stages(
     return out
 
 
-def stage_last30_means(
+def stage_lastwindow_means(
     df: pd.DataFrame,
     stage_duration_s: float = 180.0,
     last_window_s: float = 30.0,
@@ -63,13 +63,11 @@ def stage_last30_means(
         sub = df[df["stage_idx"] == sid].copy()
         if sub.empty:
             continue
-        # stage boundaries based on actual earliest sample in stage (works even if first seconds missing)
         t0 = float(sub["t_s"].min())
         stage_end = t0 + float(stage_duration_s)
         win_start = stage_end - float(last_window_s)
         win = sub[(sub["t_s"] >= win_start) & (sub["t_s"] <= stage_end)]
         if win.empty:
-            # fallback: last window of available data
             t1 = float(sub["t_s"].max())
             win = sub[sub["t_s"] >= (t1 - float(last_window_s))]
 
@@ -80,7 +78,8 @@ def stage_last30_means(
             "t_end_s": stage_end,
             "n_samples": int(win.shape[0]),
         }
-        for col in ["V'O2", "V'CO2", "V'E", "RER", "V'E/V'O2", "V'E/V'CO2", "VT", "AF", "HF"]:
+        for col in ["V'O2", "V'CO2", "V'E", "RER", "V'E/V'O2", "V'E/V'CO2", "VT", "AF", "HF",
+                    "PETO2", "PETCO2", "EQO2", "EQCO2"]:
             if col in win.columns:
                 row[col] = float(pd.to_numeric(win[col], errors="coerce").mean())
         out_rows.append(row)
